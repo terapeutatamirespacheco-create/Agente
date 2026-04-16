@@ -1,162 +1,244 @@
 import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import rateLimit from "express-rate-limit";
+import axios from "axios";
 import dotenv from "dotenv";
-import OpenAI from "openai";
-import crypto from "crypto";
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-const WHATSAPP_URL =
-  process.env.WHATSAPP_URL ||
-  "https://wa.me/5500000000000?text=Quero%20agendar%20uma%20sessao";
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
-/* -------------------------------------------------------------------------- */
-/*                                  MIDDLEWARE                                */
-/* -------------------------------------------------------------------------- */
-
-app.use(cors());
-app.use(helmet());
 app.use(express.json());
 
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-  })
-);
+const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-/* -------------------------------------------------------------------------- */
-/*                                   HELPERS                                  */
-/* -------------------------------------------------------------------------- */
+// ==============================
+// 🧠 MEMÓRIA INTELIGENTE
+// ==============================
+const memory = {};
 
-function createId() {
-  return crypto.randomUUID();
+function getUserMemory(phone) {
+  if (!memory[phone]) {
+    memory[phone] = {
+      name: null,
+      dor_superficial: null,
+      dor_real: null,
+      tempo_problema: null,
+      impacto: null,
+      tentativas: null,
+      prontidao: null,
+      objecoes: [],
+      stage: "abertura"
+    };
+  }
+  return memory[phone];
 }
 
-function detectCrisis(message) {
-  const text = message.toLowerCase();
+// ==============================
+// 🔐 VERIFICAÇÃO WEBHOOK
+// ==============================
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
 
-  return (
-    text.includes("quero morrer") ||
-    text.includes("me matar") ||
-    text.includes("suicidio")
-  );
-}
+  if (mode && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
 
-/* -------------------------------------------------------------------------- */
-/*                               PROMPT PRINCIPAL                             */
-/* -------------------------------------------------------------------------- */
-
-function buildPrompt(message) {
-  return `
-Você é Tamires, uma especialista em atendimento e conversão para terapias emocionais profundas, representando a marca Tamires Pacheco Neuroterapeuta.
-
-Sua missão é conduzir conversas com mulheres que estão vivendo dores emocionais, guiando-as com autoridade, sensibilidade e direção até a decisão de iniciar o tratamento NeuroPrime.
-
-CONTEXTO DO PRODUTO:
-- Método: NeuroPrime
-- Foco: tratar a raiz emocional
-- Estrutura: 3 sessões
-- Promessa: transformação profunda ao tratar a causa emocional
-- Público: mulheres com ansiedade, bloqueios emocionais, padrões repetitivos, baixa autoestima, relações difíceis
-
-POSICIONAMENTO:
-Você não é atendente. Você é especialista.
-
-Seu tom:
-- Acolhedor, mas firme
-- Profissional
-- Direto e seguro
-- Elegante
-
-FLUXO:
-
-1. Conectar
-2. Diagnosticar
-3. Reenquadrar
-4. Apresentar método
-5. Filtrar
-6. Gerar valor
-7. Conduzir para fechamento
-
-REGRAS:
-- Nunca seja genérica
-- Sempre termine com pergunta
-- Nunca pressione agressivamente
-- Conduza a conversa
-- Gere valor antes de preço
-
-MENSAGEM DO USUÁRIO:
-"${message}"
-
-Responda como Tamires, seguindo o fluxo.
-`;
-}
-
-/* -------------------------------------------------------------------------- */
-/*                                   ROUTES                                   */
-/* -------------------------------------------------------------------------- */
-
-app.get("/", (req, res) => {
-  res.json({
-    status: "online",
-    message: "NeuroPrime AI rodando",
-  });
+  res.sendStatus(403);
 });
 
-/* --------------------------------- CHAT ---------------------------------- */
-
-app.post("/chat", async (req, res) => {
+// ==============================
+// 📩 RECEBER MENSAGEM
+// ==============================
+app.post("/webhook", async (req, res) => {
   try {
-    const { message } = req.body;
+    const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
 
-    if (!message) {
-      return res.status(400).json({ error: "Mensagem obrigatória" });
+    if (!msg) return res.sendStatus(200);
+
+    const from = msg.from;
+    const originalText = msg.text?.body || "";
+    const text = originalText.toLowerCase();
+
+    const user = getUserMemory(from);
+
+    // ==============================
+    // 🧠 CAPTURA NOME
+    // ==============================
+    if (!user.name) {
+      const match = originalText.match(/meu nome é (.*)/i);
+      if (match) user.name = match[1];
     }
 
-    if (detectCrisis(message)) {
-      return res.json({
-        reply:
-          "Sinto muito por você estar passando por isso. O mais importante agora é buscar ajuda imediata de alguém de confiança ou um profissional.",
-      });
+    // ==============================
+    // 🧠 IDENTIFICA DOR SUPERFICIAL
+    // ==============================
+    if (!user.dor_superficial) {
+      if (text.includes("ansiedade")) user.dor_superficial = "ansiedade";
+      if (text.includes("medo")) user.dor_superficial = "medo";
+      if (text.includes("insegurança")) user.dor_superficial = "insegurança";
+      if (text.includes("bloqueio")) user.dor_superficial = "bloqueio emocional";
     }
 
-    const response = await openai.responses.create({
-      model: "gpt-5.4",
-      input: buildPrompt(message),
-    });
+    let reply = "";
 
-    const reply =
-      response.output_text ||
-      "Me conta um pouco mais sobre o que você está sentindo.";
+    // ==============================
+    // 🎯 INTENÇÃO DIRETA DE COMPRA
+    // ==============================
+    if (
+      text.includes("valor") ||
+      text.includes("preço") ||
+      text.includes("quanto custa")
+    ) {
+      user.stage = "oferta";
 
-    res.json({
-      id: createId(),
-      reply,
-      cta: WHATSAPP_URL,
-    });
+      reply = `Hoje eu trabalho com dois formatos:
+
+🔹 Neuroprime Basic – R$950  
+🔹 Neuroprime Premium – R$1850  
+
+Qual faz mais sentido pra você nesse momento?`;
+    }
+
+    // ==============================
+    // 💰 FECHAMENTO
+    // ==============================
+    else if (text.includes("basic")) {
+      reply = `Perfeito${user.name ? ", " + user.name : ""}.
+
+👉 Link para iniciar:
+https://tamires-pacheco-neuroterapia.pay.yampi.com.br/r/FMRN1NG8C6`;
+    }
+
+    else if (text.includes("premium")) {
+      reply = `Excelente escolha${user.name ? ", " + user.name : ""}.
+
+👉 Link para iniciar:
+https://tamires-pacheco-neuroterapia.pay.yampi.com.br/r/OHLK4OX0B1`;
+    }
+
+    // ==============================
+    // 🔁 OBJEÇÃO
+    // ==============================
+    else if (text.includes("pensar") || text.includes("depois")) {
+      reply = `Eu entendo.
+
+Mas sendo direta:
+isso não costuma se resolver sozinho.
+
+Se continuar adiando,
+isso tende a se repetir.
+
+A decisão aqui não é sobre terapia.
+
+É sobre continuar como está
+ou mudar de verdade.`;
+    }
+
+    // ==============================
+    // 🤖 GPT INTELIGENTE
+    // ==============================
+    else {
+      const gpt = await axios.post(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: `
+Você é Tamires Pacheco, neuroterapeuta especialista.
+
+Seu objetivo:
+conduzir a pessoa até iniciar o tratamento.
+
+Use SEMPRE este fluxo:
+
+1. acolher
+2. aprofundar dor
+3. identificar padrão emocional
+4. mostrar raiz inconsciente
+5. conduzir para solução
+
+BASE TERAPÊUTICA:
+
+- A maioria dos problemas não começa no presente
+- Existe uma raiz emocional inconsciente
+- Enquanto não tratar, o padrão se repete
+- Terapias comuns lidam com sintoma
+- Aqui tratamos a causa
+
+ESTILO:
+- humano
+- direto
+- emocional
+- frases curtas
+- sem texto longo
+
+REGRAS:
+- sempre fazer perguntas quando faltar informação
+- nunca ir direto para venda
+- conduzir gradualmente
+- gerar leve tensão emocional
+
+DADOS DO USUÁRIO:
+Nome: ${user.name || "não informado"}
+Dor: ${user.dor_superficial || "não identificada"}
+Etapa: ${user.stage}
+`
+            },
+            {
+              role: "user",
+              content: originalText
+            }
+          ]
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${OPENAI_API_KEY}`
+          }
+        }
+      );
+
+      reply = gpt.data.choices[0].message.content;
+
+      if (user.name) {
+        reply = `${user.name}, ${reply}`;
+      }
+
+      // CTA leve automático
+      if (!reply.toLowerCase().includes("começar")) {
+        reply += "\n\nSe fizer sentido, posso te explicar como iniciar.";
+      }
+    }
+
+    // ==============================
+    // 📤 ENVIO WHATSAPP
+    // ==============================
+    await axios.post(
+      `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: "whatsapp",
+        to: from,
+        text: { body: reply }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${WHATSAPP_TOKEN}`,
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    res.sendStatus(200);
   } catch (error) {
-    console.error(error);
-
-    res.json({
-      reply:
-        "Entendo você. Isso que você está sentindo merece atenção. Quer me contar um pouco mais?",
-      cta: WHATSAPP_URL,
-    });
+    console.log(error.response?.data || error.message);
+    res.sendStatus(500);
   }
 });
 
-/* --------------------------------- START --------------------------------- */
-
-app.listen(PORT, () => {
-  console.log(`🚀 Server rodando na porta ${PORT}`);
+app.listen(3000, () => {
+  console.log("Servidor rodando...");
 });
