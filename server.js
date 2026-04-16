@@ -42,27 +42,8 @@ function createId() {
   return crypto.randomUUID();
 }
 
-function normalize(text) {
-  return text.toLowerCase();
-}
-
-function classify(message) {
-  const text = normalize(message);
-
-  if (text.includes("ansiedade") || text.includes("ansioso"))
-    return "ansiedade";
-
-  if (text.includes("relacionamento") || text.includes("termino"))
-    return "relacionamento";
-
-  if (text.includes("autoestima") || text.includes("inseguro"))
-    return "autoestima";
-
-  return "geral";
-}
-
 function detectCrisis(message) {
-  const text = normalize(message);
+  const text = message.toLowerCase();
 
   return (
     text.includes("quero morrer") ||
@@ -71,25 +52,53 @@ function detectCrisis(message) {
   );
 }
 
-function buildPrompt(message, category) {
+/* -------------------------------------------------------------------------- */
+/*                               PROMPT PRINCIPAL                             */
+/* -------------------------------------------------------------------------- */
+
+function buildPrompt(message) {
   return `
-Você é um especialista em acolhimento emocional e conversão para terapia.
+Você é Tamires, uma especialista em atendimento e conversão para terapias emocionais profundas, representando a marca Tamires Pacheco Neuroterapeuta.
+
+Sua missão é conduzir conversas com mulheres que estão vivendo dores emocionais, guiando-as com autoridade, sensibilidade e direção até a decisão de iniciar o tratamento NeuroPrime.
+
+CONTEXTO DO PRODUTO:
+- Método: NeuroPrime
+- Foco: tratar a raiz emocional
+- Estrutura: 3 sessões
+- Promessa: transformação profunda ao tratar a causa emocional
+- Público: mulheres com ansiedade, bloqueios emocionais, padrões repetitivos, baixa autoestima, relações difíceis
+
+POSICIONAMENTO:
+Você não é atendente. Você é especialista.
+
+Seu tom:
+- Acolhedor, mas firme
+- Profissional
+- Direto e seguro
+- Elegante
+
+FLUXO:
+
+1. Conectar
+2. Diagnosticar
+3. Reenquadrar
+4. Apresentar método
+5. Filtrar
+6. Gerar valor
+7. Conduzir para fechamento
 
 REGRAS:
-- Seja humano e empático
-- Não seja robótico
-- Não force venda
-- Faça no máximo 1 pergunta
-- Leve a pessoa naturalmente para terapia
+- Nunca seja genérica
+- Sempre termine com pergunta
+- Nunca pressione agressivamente
+- Conduza a conversa
+- Gere valor antes de preço
 
-CONTEXTO:
-Usuário disse: "${message}"
-Categoria: ${category}
+MENSAGEM DO USUÁRIO:
+"${message}"
 
-OBJETIVO:
-Responder de forma acolhedora e conduzir para terapia.
-
-Se fizer sentido, convide para WhatsApp: ${WHATSAPP_URL}
+Responda como Tamires, seguindo o fluxo.
 `;
 }
 
@@ -100,7 +109,7 @@ Se fizer sentido, convide para WhatsApp: ${WHATSAPP_URL}
 app.get("/", (req, res) => {
   res.json({
     status: "online",
-    message: "AI Therapy Server rodando",
+    message: "NeuroPrime AI rodando",
   });
 });
 
@@ -117,24 +126,21 @@ app.post("/chat", async (req, res) => {
     if (detectCrisis(message)) {
       return res.json({
         reply:
-          "Sinto muito por você estar passando por isso. O mais importante agora é buscar ajuda imediata de alguém de confiança ou um serviço de apoio emocional.",
+          "Sinto muito por você estar passando por isso. O mais importante agora é buscar ajuda imediata de alguém de confiança ou um profissional.",
       });
     }
 
-    const category = classify(message);
-
     const response = await openai.responses.create({
       model: "gpt-5.4",
-      input: buildPrompt(message, category),
+      input: buildPrompt(message),
     });
 
     const reply =
       response.output_text ||
-      "Entendo você. Quer me contar um pouco mais sobre o que está sentindo?";
+      "Me conta um pouco mais sobre o que você está sentindo.";
 
     res.json({
       id: createId(),
-      category,
       reply,
       cta: WHATSAPP_URL,
     });
@@ -143,7 +149,7 @@ app.post("/chat", async (req, res) => {
 
     res.json({
       reply:
-        "Entendi. Isso que você está sentindo merece atenção. Se quiser, posso te explicar como funciona a terapia.",
+        "Entendo você. Isso que você está sentindo merece atenção. Quer me contar um pouco mais?",
       cta: WHATSAPP_URL,
     });
   }
