@@ -13,7 +13,7 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 // ==============================
-// 🧠 MEMÓRIA INTELIGENTE
+// 🧠 MEMÓRIA
 // ==============================
 const memory = {};
 
@@ -27,7 +27,6 @@ function getUserMemory(phone) {
       impacto: null,
       tentativas: null,
       prontidao: null,
-      objecoes: [],
       stage: "abertura"
     };
   }
@@ -35,27 +34,82 @@ function getUserMemory(phone) {
 }
 
 // ==============================
-// 🔐 VERIFICAÇÃO WEBHOOK
+// 🔐 VERIFICAÇÃO
 // ==============================
 app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode && token === VERIFY_TOKEN) {
-    return res.status(200).send(challenge);
+  if (req.query["hub.verify_token"] === VERIFY_TOKEN) {
+    return res.send(req.query["hub.challenge"]);
   }
-
   res.sendStatus(403);
 });
 
 // ==============================
-// 📩 RECEBER MENSAGEM
+// 🧠 FUNÇÃO GPT
+// ==============================
+async function gerarResposta(user, mensagem) {
+  const response = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `
+Você é Tamires Pacheco, especialista em desbloqueio emocional profundo.
+
+Seu objetivo é conduzir a pessoa até iniciar o tratamento.
+
+CONTEXTO:
+Nome: ${user.name || "não informado"}
+Dor superficial: ${user.dor_superficial || "não identificada"}
+Tempo do problema: ${user.tempo_problema || "não identificado"}
+Impacto: ${user.impacto || "não identificado"}
+Etapa: ${user.stage}
+
+ESTRATÉGIA:
+- acolher
+- aprofundar
+- identificar padrão
+- mostrar raiz emocional
+- conduzir para decisão
+
+REGRAS:
+- respostas curtas
+- nunca genérica
+- sempre investigar
+- provocar reflexão leve
+
+FORMATO DE RESPOSTA (OBRIGATÓRIO JSON):
+{
+  "resposta": "texto para cliente",
+  "intencao": "explorar | aprofundar | fechar",
+  "produto": "basic | premium | nenhum"
+}
+`
+        },
+        {
+          role: "user",
+          content: mensagem
+        }
+      ]
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
+      }
+    }
+  );
+
+  return response.data.choices[0].message.content;
+}
+
+// ==============================
+// 📩 WEBHOOK
 // ==============================
 app.post("/webhook", async (req, res) => {
   try {
     const msg = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-
     if (!msg) return res.sendStatus(200);
 
     const from = msg.from;
@@ -65,16 +119,13 @@ app.post("/webhook", async (req, res) => {
     const user = getUserMemory(from);
 
     // ==============================
-    // 🧠 CAPTURA NOME
+    // 🧠 CAPTURA SIMPLES
     // ==============================
     if (!user.name) {
       const match = originalText.match(/meu nome é (.*)/i);
       if (match) user.name = match[1];
     }
 
-    // ==============================
-    // 🧠 IDENTIFICA DOR SUPERFICIAL
-    // ==============================
     if (!user.dor_superficial) {
       if (text.includes("ansiedade")) user.dor_superficial = "ansiedade";
       if (text.includes("medo")) user.dor_superficial = "medo";
@@ -82,16 +133,18 @@ app.post("/webhook", async (req, res) => {
       if (text.includes("bloqueio")) user.dor_superficial = "bloqueio emocional";
     }
 
+    if (!user.tempo_problema) {
+      if (text.includes("anos") || text.includes("meses")) {
+        user.tempo_problema = originalText;
+      }
+    }
+
     let reply = "";
 
     // ==============================
-    // 🎯 INTENÇÃO DIRETA DE COMPRA
+    // 🎯 INTENÇÃO DIRETA
     // ==============================
-    if (
-      text.includes("valor") ||
-      text.includes("preço") ||
-      text.includes("quanto custa")
-    ) {
+    if (text.includes("valor") || text.includes("preço")) {
       user.stage = "oferta";
 
       reply = `Hoje eu trabalho com dois formatos:
@@ -103,119 +156,53 @@ Qual faz mais sentido pra você nesse momento?`;
     }
 
     // ==============================
-    // 💰 FECHAMENTO
-    // ==============================
-    else if (text.includes("basic")) {
-      reply = `Perfeito${user.name ? ", " + user.name : ""}.
-
-👉 Link para iniciar:
-https://tamires-pacheco-neuroterapia.pay.yampi.com.br/r/FMRN1NG8C6`;
-    }
-
-    else if (text.includes("premium")) {
-      reply = `Excelente escolha${user.name ? ", " + user.name : ""}.
-
-👉 Link para iniciar:
-https://tamires-pacheco-neuroterapia.pay.yampi.com.br/r/OHLK4OX0B1`;
-    }
-
-    // ==============================
-    // 🔁 OBJEÇÃO
-    // ==============================
-    else if (text.includes("pensar") || text.includes("depois")) {
-      reply = `Eu entendo.
-
-Mas sendo direta:
-isso não costuma se resolver sozinho.
-
-Se continuar adiando,
-isso tende a se repetir.
-
-A decisão aqui não é sobre terapia.
-
-É sobre continuar como está
-ou mudar de verdade.`;
-    }
-
-    // ==============================
-    // 🤖 GPT INTELIGENTE
+    // 🤖 GPT
     // ==============================
     else {
-      const gpt = await axios.post(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: `
-Você é Tamires Pacheco, neuroterapeuta especialista.
+      const respostaGPT = await gerarResposta(user, originalText);
 
-Seu objetivo:
-conduzir a pessoa até iniciar o tratamento.
+      let parsed;
 
-Use SEMPRE este fluxo:
-
-1. acolher
-2. aprofundar dor
-3. identificar padrão emocional
-4. mostrar raiz inconsciente
-5. conduzir para solução
-
-BASE TERAPÊUTICA:
-
-- A maioria dos problemas não começa no presente
-- Existe uma raiz emocional inconsciente
-- Enquanto não tratar, o padrão se repete
-- Terapias comuns lidam com sintoma
-- Aqui tratamos a causa
-
-ESTILO:
-- humano
-- direto
-- emocional
-- frases curtas
-- sem texto longo
-
-REGRAS:
-- sempre fazer perguntas quando faltar informação
-- nunca ir direto para venda
-- conduzir gradualmente
-- gerar leve tensão emocional
-
-DADOS DO USUÁRIO:
-Nome: ${user.name || "não informado"}
-Dor: ${user.dor_superficial || "não identificada"}
-Etapa: ${user.stage}
-`
-            },
-            {
-              role: "user",
-              content: originalText
-            }
-          ]
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${OPENAI_API_KEY}`
-          }
-        }
-      );
-
-      reply = gpt.data.choices[0].message.content;
-
-      if (user.name) {
-        reply = `${user.name}, ${reply}`;
+      try {
+        parsed = JSON.parse(respostaGPT);
+      } catch {
+        parsed = { resposta: respostaGPT };
       }
 
-      // CTA leve automático
+      reply = parsed.resposta;
+
+      // ==============================
+      // 🧠 DECISÃO INTELIGENTE
+      // ==============================
+      if (parsed.produto === "premium") {
+        user.stage = "oferta";
+      }
+
+      // CTA leve
       if (!reply.toLowerCase().includes("começar")) {
         reply += "\n\nSe fizer sentido, posso te explicar como iniciar.";
       }
     }
 
     // ==============================
-    // 📤 ENVIO WHATSAPP
+    // 💰 FECHAMENTO
+    // ==============================
+    if (text.includes("basic")) {
+      reply = `Perfeito.
+
+👉 Iniciar:
+https://tamires-pacheco-neuroterapia.pay.yampi.com.br/r/FMRN1NG8C6`;
+    }
+
+    if (text.includes("premium")) {
+      reply = `Excelente escolha.
+
+👉 Iniciar:
+https://tamires-pacheco-neuroterapia.pay.yampi.com.br/r/OHLK4OX0B1`;
+    }
+
+    // ==============================
+    // 📤 ENVIO
     // ==============================
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
